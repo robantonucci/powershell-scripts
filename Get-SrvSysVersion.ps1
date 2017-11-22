@@ -3,37 +3,39 @@ function Get-SrvSysVersion
 <#
 
 .SYNOPSIS
-	This function will list the version of Srv.sys and check if its been patched against MS17-010.
+	This function will list the version of Srv.sys and check if its been patched
+  against MS17-010.
 
 .DESCRIPTION
-	The script will use WMI to query the version of srv.sys and check the version against a known
-    patched version.
+	The script will use WMI to query the version of srv.sys and check the version
+  against a known patched version.
 
 .PARAMETER ActiveDirectory
-	Queries Active Directory for all Windows computers with a user specified number of days since
-    lastLogon.
+	Queries Active Directory for all Windows computers with a user specified
+  number of days since lastLogon.
 
 .PARAMETER Credentials
-    Pops up a login box to change your scan credentials. Usefull for scanning other domains.
+  Pops up a login box to change your scan credentials. Usefull for scanning
+  other domains.
 
 .PARAMETER ComputerName
-	A single Computer or an array of computer names.  The default is localhost ($env:COMPUTERNAME).
+	A single Computer or an array of computer names.  The default is localhost.
 
 .PARAMETER DomainServer
-    The domain to query if using the ActiveDirectory parameter.
-    Default Value: $ENV:USERDOMAIN (current domain)
+  The domain to query if using the ActiveDirectory parameter.
+  Default Value: $ENV:USERDOMAIN (current domain)
 
 .PARAMETER Jobs
-	Number of jobs to spawn, be careful this is the total number of PowerShell processes that will
-    be open. Too high a value will use a lot of memory..
+	Number of jobs to spawn, be careful this is the total number of PowerShell
+  processes that will be open. Too high a value will use a lot of memory.
 	Default Value = 30
 
 .EXAMPLE
 	$Servers = Get-Content "C:\ServerList.txt"
-	.\Get-SrvSysVersion.ps1 -ComputerName $Servers
+	Get-SrvSysVersion -ComputerName $Servers
 
 	This example will return the last logon information from all the servers in the
-    C:\ServerList.txt file.
+  C:\ServerList.txt file.
 
     Computer        : YTMKBB0031KMWCB
     OS              : Microsoft Windows 7 Enterprise  LDR (Build Number 7601)
@@ -45,17 +47,18 @@ function Get-SrvSysVersion
     RunspaceId      : bfb9c738-44c6-44b1-a26e-6069fc0a4f48
 
 .EXAMPLE
-	.\Get-SrvSysVersion.ps1 -ActiveDirectory 10 | select Computer,OS,Patched,ExpectedVersion,
-    ActualVersion,UpTime,Message | Export-Csv C:\tmp\SrvSys.csv
+	Get-SrvSysVersion -ActiveDirectory 10 | select Computer,OS,Patched,
+  ExpectedVersion,ActualVersion,UpTime,Message | Export-Csv C:\tmp\SrvSys.csv
 
-	This example will return the Srv.sys information from all the servers that have logged in
-    to AD in the past 10 days and export it to csv.
+	This example will return the Srv.sys information from all the servers that
+  have logged in to AD in the past 10 days and export it to csv.
 
 .EXAMPLE
-	.\Get-SrvSysVersion.ps1 -ActiveDirectory 10 -Jobs 50 -DomainServer Contoso.local -Credential
-
-	This example will return the Srv.sys information from all the servers in Contoso.local that
-    have logged in, in the past 10 day and prompt for credentials.
+	Get-SrvSysVersion -ActiveDirectory 10 -Jobs 50 -DomainServer Contoso.local
+  -Credential
+	This example will return the Srv.sys information from all the servers in
+  Contoso.local that have logged in, in the past 10 day and prompt for
+  credentials.
 
 .LINK
 
@@ -105,25 +108,30 @@ foreach ($Computer in $ComputerName) {
 			$patched = "Unknown"
 			$msg = ""
 			$upTime = ""
+            $fqdn = ''
 			try {
 
                 if ($Credential) {
                     $os = Get-WmiObject -class Win32_OperatingSystem -ComputerName $Computer -Credential $Creds -ErrorAction Stop
+                    $computerSystem = Get-WmiObject -class Win32_ComputerSystem -ComputerName $Computer -Credential $Creds -ErrorAction Stop
                 }
                 else {
                     $os = Get-WmiObject -class Win32_OperatingSystem -ComputerName $Computer -ErrorAction Stop
+                    $computerSystem = Get-WmiObject -class Win32_ComputerSystem -ComputerName $Computer -ErrorAction Stop
                 }
                 $upTime = $os.LastBootUpTime
                 $upTime = [Management.ManagementDateTimeConverter]::ToDateTime($upTime)
+                $fqdn = “{0}.{1}” -f $computerSystem.Name, $computerSystem.Domain
                 $upTime = $((Get-Date) - $upTime).Days
                 $osName = $os.Caption -replace ",",""
                 $osDrive = $os.SystemDrive
                 $systemDir = $($os.SystemDirectory -replace "\\", "\\").split(":")[1]
+                $query = "SELECT * FROM CIM_DataFile WHERE Drive ='$osDrive' AND Path='$systemDir\\drivers\\' AND FileName='srv' AND Extension='sys'"
                 if ($Credential) {
-                    $versionInfo = Get-WMIObject -ComputerName $Computer -Query "SELECT * FROM CIM_DataFile WHERE Drive ='$osDrive' AND Path='$systemDir\\drivers\\' AND FileName='srv' AND Extension='sys'" -Credential $Creds -ErrorAction Stop| select Version
+                    $versionInfo = Get-WMIObject -ComputerName $Computer -Query $query -Credential $Creds -ErrorAction Stop| select Version
                 }
                 else {
-                    $versionInfo = Get-WMIObject -ComputerName $Computer -Query "SELECT * FROM CIM_DataFile WHERE Drive ='$osDrive' AND Path='$systemDir\\drivers\\' AND FileName='srv' AND Extension='sys'" -ErrorAction Stop | select Version
+                    $versionInfo = Get-WMIObject -ComputerName $Computer -Query $query -ErrorAction Stop | select Version
                 }
                 if ($versionInfo) {
                     $versionString = $versionInfo.version
@@ -243,7 +251,7 @@ foreach ($Computer in $ComputerName) {
                     }
                 }
 
-        $details = @($Computer,$fullOS,$expectedVersion,$fileVersion,$patched,$upTime,$msg)
+        $details = @($Computer,$fqdn,$fullOS,$expectedVersion,$fileVersion,$patched,$upTime,$msg)
 		return $details
 
     } # end $Job = Start-Job -Name $Computer -ArgumentList $Computer -ScriptBlock
@@ -256,24 +264,25 @@ foreach ($Computer in $ComputerName) {
         $AllJobs = Get-Job
         foreach ($Job in $AllJobs) {
             if ($Job.State -eq 'Running') {
-                $Job | Wait-Job -Timeout 60 | Out-Null
+                $Job | Wait-Job -Timeout 120 | Out-Null
             }
 			if ($Job.State -eq 'Completed') {
 				$details = $Job | Receive-Job
 			}
 			else{
 				Write-Warning "$($Job.Name) timed out."
-				$details = @($Job.Name,"Unknown",$(New-Object System.Version("0.0.0000.00000")),$(New-Object System.Version("0.0.0000.00000")),"Unknown","","Job timed out.")
+				$details = @($Job.Name,"","Unknown",$(New-Object System.Version("0.0.0000.00000")),$(New-Object System.Version("0.0.0000.00000")),"Unknown","","Job timed out.")
 			}
 			$Job | Remove-Job -Force
 			$SrvSys = New-Object -TypeName PSObject
 			$SrvSys | Add-Member -MemberType NoteProperty -Name Computer -Value $details[0]
-			$SrvSys | Add-Member -MemberType NoteProperty -Name OS -Value $details[1]
-			$SrvSys | Add-Member -MemberType NoteProperty -Name ExpectedVersion -Value $details[2]
-			$SrvSys | Add-Member -MemberType NoteProperty -Name ActualVersion -Value $details[3]
-			$SrvSys | Add-Member -MemberType NoteProperty -Name Patched -Value $details[4]
-			$SrvSys | Add-Member -MemberType NoteProperty -Name UpTime -Value $details[5]
-			$SrvSys | Add-Member -MemberType NoteProperty -Name Message -Value $details[6]
+      $SrvSys | Add-Member -MemberType NoteProperty -Name FQDN -Value $details[1]
+			$SrvSys | Add-Member -MemberType NoteProperty -Name OS -Value $details[2]
+			$SrvSys | Add-Member -MemberType NoteProperty -Name ExpectedVersion -Value $details[3]
+			$SrvSys | Add-Member -MemberType NoteProperty -Name ActualVersion -Value $details[4]
+			$SrvSys | Add-Member -MemberType NoteProperty -Name Patched -Value $details[5]
+			$SrvSys | Add-Member -MemberType NoteProperty -Name UpTime -Value $details[6]
+			$SrvSys | Add-Member -MemberType NoteProperty -Name Message -Value $details[7]
             $SrvSys
         } #end foreach ($Job in $AllJobs)
     } #end if (($TotalJobs -eq $Jobs) -or ($ComputersLeft -eq 0))
